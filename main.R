@@ -173,7 +173,7 @@ data <- data[data$summaryLength > 10, ]
 data$summaryLength <- NULL
 
 # Define a text tokenizer
-summary_tokenizer <- text_tokenizer(num_words = 2 ** 10)
+summary_tokenizer <- text_tokenizer(num_words = 2 ** 9)
 
 # Fit the tokenizer
 fit_text_tokenizer(summary_tokenizer, data$summary)
@@ -222,7 +222,7 @@ data$countries <- NULL
 set.seed(1993)
 
 # Encode the tags (figure this guy out)
-label_tokenizer <- text_tokenizer(split=", ")
+label_tokenizer <- text_tokenizer(split=", ", num_words=2**5)
 fit_text_tokenizer(label_tokenizer, data$genres)
 
 data$labels <- texts_to_matrix(label_tokenizer, data$genres, mode='binary')
@@ -237,20 +237,20 @@ data.test <- data[-split_indicies, ]
 
 # Define some hyperparameters
 parameters <- ordered_dict()
-parameters$set('filters', 2 ** 5)
+parameters$set('filters', 2 ** 4)
 parameters$set('kernel_size', 2 ** 2 + 1)
 parameters$set('pool_size', 2 ** 2)
-parameters$set('lstm_units', 2 ** 6)
+parameters$set('lstm_units', 2 ** 5)
 parameters$set('input_dim', summary_tokenizer$num_words + 1)
-parameters$set('output_dim', 2 ** 6)
+parameters$set('output_dim', 2 ** 5)
 parameters$set('input_length', 2 ** 8)
-parameters$set('output_length', length(label_tokenizer$word_counts) + 1)
-parameters$set('loss', loss_categorical_crossentropy())
-parameters$set('optimizer', 'nadam')
-parameters$set('metrics', c('accuracy', 'mse'))
+parameters$set('output_length', label_tokenizer$num_words)
+parameters$set('loss', 'binary_crossentropy')
+parameters$set('optimizer', 'adam')
+parameters$set('metrics', c('accuracy', metric_precision(name='precision'), metric_recall(name='recall'), metric_auc(name='auc'), 'mse'))
 parameters$set('batch_size', 2 ** 5)
 parameters$set('epochs', 2 ** 4)
-parameters$set('dropout', 0.5)
+parameters$set('dropout', 0.4)
 parameters$set('strides', 1)
 parameters$set('validation_split', 0.2)
 parameters$set(
@@ -259,14 +259,14 @@ parameters$set(
     callback_early_stopping(
       monitor = "val_loss",
       min_delta = 0.0001,
-      patience = 4,
+      patience = 12,
       restore_best_weights = TRUE
     ),
     callback_reduce_lr_on_plateau(
-      patience = 3,
+      patience = 8,
       factor = 0.1,
       min_delta = 0.0001,
-      monitor = "val_accuracy"
+      monitor = "val_auc"
     ),
     callback_tensorboard(
       paste("logs/", Sys.time(), sep = ""),
@@ -280,26 +280,30 @@ parameters$set(
 
 # Function to create and train the model
 summaryLSTM <- function(x_train, y_train, params) {
-  model <- keras_model_sequential()
+  model <- keras_model_sequential(name='Movie_Genre_Classifier')
   model %>%
     layer_embedding(
       params$get('input_dim'),
       params$get('output_dim'),
-      input_length = params$get('input_length')
+      input_length = params$get('input_length'),
+      name='Embedding_Layer'
     ) %>%
-    layer_dropout(params$get('dropout')) %>%
+    layer_dropout(params$get('dropout'), name='Dropout_Layer') %>%
     layer_conv_1d(
       filters = params$get('filters'),
       kernel_size = params$get('kernel_size'),
       padding = 'valid',
       strides = params$get('strides'),
+      bias_initializer = 'he_normal',
+      name='Conv._Layer'
     ) %>%
-    layer_activation_relu() %>%
-    layer_max_pooling_1d(pool_size = params$get('pool_size')) %>%
-    layer_lstm(params$get('lstm_units'), activation = NULL) %>%
-    layer_activation('tanh') %>%
-    layer_dense(params$get('output_length')) %>%
-    layer_activation("sigmoid")
+    layer_activation_relu(name='Conv._Activation_Layer') %>%
+    layer_max_pooling_1d(pool_size = params$get('pool_size'), name='Pooling_Layer') %>%
+    layer_lstm(params$get('lstm_units'), name='LSTM_Layer', bias_initializer = 'he_normal') %>%
+    #layer_activation('tanh') %>%
+    #layer_dropout(params$get('dropout')) %>%
+    layer_dense(params$get('output_length'), name='Output_Layer') %>%
+    layer_activation("sigmoid", name='Output_Activation_Layer')
   
   model %>% compile(
     loss = params$get('loss'),
@@ -358,7 +362,7 @@ get_embedding_explination <- function(text) {
   text <- clean_text(text)
   summary_tokenizer %>% fit_text_tokenizer(text)
   text_to_seq <- texts_to_sequences(summary_tokenizer, text)
-  sentences <- text_to_seq %>% pad_sequences(maxlen=2**9, padding='pre', truncating = 'post')
+  sentences <- text_to_seq %>% pad_sequences(maxlen=2**8, padding='pre', truncating = 'post')
 }
 
 get_tokens <- function(text) {
@@ -376,7 +380,7 @@ predict_summary <- function(text) {
 }
 
 # Explain some sentences (112 is an example of a science book)
-sentence_to_explain <- data$summary[c(2,117)]
+sentence_to_explain <- data$summary[c(1,10)]
 explainer <- lime(sentence_to_explain, model=model, preprocess=get_embedding_explination)
 explination <- explain(sentence_to_explain, explainer, n_labels=1, n_features=25, n_permutations = 1e4)
 
